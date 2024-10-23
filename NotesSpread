@@ -1,6 +1,10 @@
 fantasy_cleaned1 <- as_tibble(fantasy_cleaned, .name_repair = "unique")
 fantasy_cleaned1$PPR <- as.numeric(fantasy_cleaned1$PPR)
 
+df_filtered <- fantasy_cleaned1 
+df_filtered$G <- as.integer(fantasy_cleaned1$G)
+df_filtered <- df_filtered %>% filter(G > 7)
+
 #df_filtered <- fantasy_cleaned1 %>% filter(G > 7)
 #print(df_filtered)
 
