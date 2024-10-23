@@ -1,0 +1,170 @@
+fantasy_cleaned1 <- as_tibble(fantasy_cleaned, .name_repair = "unique")
+fantasy_cleaned1$PPR <- as.numeric(fantasy_cleaned1$PPR)
+
+#df_filtered <- fantasy_cleaned1 %>% filter(G > 7)
+#print(df_filtered)
+
+##Based on Notes
+
+#Calculate year-to-year variance in PPR by position
+df_filtered_grouped <- fantasy_cleaned1 %>%
+  group_by(Player, FantPos, Year) %>%
+  summarise(PPR = sum(PPR, na.rm = TRUE)) %>%
+  ungroup()
+
+print(head(df_filtered_grouped))
+
+df_pivot <- tidyr::pivot_wider(df_filtered_grouped, 
+                               names_from = Year, 
+                               values_from = PPR)
+
+variance_by_position <- df_pivot %>%
+  group_by(FantPos) %>%
+  summarise(across(everything(), ~ var(.x, na.rm = TRUE)))
+print(variance_by_position)
+
+#Bootstrap to estimate variance for WRs vs other positions
+bootstrap_variance <- function(data, n_bootstrap = 1000) {
+  variances <- numeric(n_bootstrap)
+  for (i in 1:n_bootstrap) {
+    sample_data <- sample(data, replace = TRUE)
+    variances[i] <- var(sample_data, na.rm = TRUE)
+  }
+  return(variances)
+}
+
+wr_data <- df_pivot %>% filter(FantPos == "WR") %>% select(-Player, -FantPos)
+wr_variance <- bootstrap_variance(unlist(wr_data))
+rb_data <- df_pivot %>% filter(FantPos == "RB") %>% select(-Player, -FantPos)
+rb_variance <- bootstrap_variance(unlist(rb_data))
+
+print(mean(wr_variance))
+print(mean(rb_variance))
+
+#Exclude top 24 players and recalculate
+df_mean_ppr <- df_filtered_grouped %>%
+  group_by(Player, FantPos) %>%
+  summarise(mean_PPR = mean(PPR, na.rm = TRUE)) %>%
+  ungroup()
+
+top_24_players <- df_mean_ppr %>%
+  group_by(FantPos) %>%
+  top_n(24, mean_PPR)
+
+df_filtered_excluded <- df_filtered_grouped %>%
+  filter(!(Player %in% top_24_players$Player))
+
+df_pivot_excluded <- tidyr::pivot_wider(df_filtered_excluded, 
+                                        names_from = Year, 
+                                        values_from = PPR)
+
+variance_by_position_excluded <- df_pivot_excluded %>%
+  group_by(FantPos) %>%
+  summarise(across(everything(), ~ var(.x, na.rm = TRUE)))
+
+print(variance_by_position_excluded)
+
+#Coefficient of Variation by Position
+cv_by_position <- fantasy_cleaned1 %>%
+  group_by(FantPos) %>%
+  summarise(mean_FantPt = mean(as.numeric(PPR), na.rm = TRUE),
+            sd_FantPt = sd(as.numeric(PPR), na.rm = TRUE)) %>%
+  mutate(CV = sd_FantPt / mean_FantPt)
+
+print(cv_by_position)
+
+#Monte Carlo Simulation for Draft Strategies
+set.seed(123)  
+
+simulate_draft_strategy <- function(n_sim, positions_order) {
+  results <- numeric(n_sim)
+  
+  for (i in 1:n_sim) {
+    draft <- fantasy_cleaned1 %>%
+      filter(FantPos %in% positions_order) %>%
+      group_by(Player, FantPos) %>%
+      summarise(total_PPR = sum(as.numeric(PPR), na.rm = TRUE)) %>%
+      ungroup() %>%
+      sample_n(length(positions_order)) %>%
+      pull(total_PPR)
+    
+    results[i] <- sum(draft)
+  }
+  
+  return(results)
+}
+
+wr_rb_strategy <- simulate_draft_strategy(n_sim = 1000, positions_order = c("WR", "RB"))
+rb_wr_strategy <- simulate_draft_strategy(n_sim = 1000, positions_order = c("RB", "WR"))
+
+mean(wr_rb_strategy)
+mean(rb_wr_strategy)
+
+#Bootstrapping for Hypothesis Testing on CV
+bootstrap_cv <- function(data, n_bootstrap = 1000) {
+  boot_cvs <- numeric(n_bootstrap)
+  
+  for (i in 1:n_bootstrap) {
+    sample_data <- data %>% sample_frac(replace = TRUE)
+    mean_PPR <- mean(sample_data$PPR, na.rm = TRUE)
+    sd_PPR <- sd(sample_data$PPR, na.rm = TRUE)
+    boot_cvs[i] <- sd_PPR / mean_PPR
+  }
+  
+  return(boot_cvs)
+}
+
+wr_data <- fantasy_cleaned1 %>% filter(FantPos == "WR")
+wr_bootstrap <- bootstrap_cv(wr_data)
+
+rb_data <- fantasy_cleaned1 %>% filter(FantPos == "RB")
+rb_bootstrap <- bootstrap_cv(rb_data)
+
+t.test(wr_bootstrap, rb_bootstrap)
+
+#Non-parametric Bootstrapping to Estimate Sampling Distributions
+bootstrap_sampling_distribution <- function(data, n_bootstrap = 1000) {
+  boot_samples <- replicate(n_bootstrap, {
+    sample_data <- data %>% sample_frac(replace = TRUE)
+    mean_PPR <- mean(sample_data$PPR, na.rm = TRUE)
+    sd_PPR <- sd(sample_data$PPR, na.rm = TRUE)
+    return(sd_PPR / mean_PPR)
+  })
+  
+  return(boot_samples)
+}
+
+wr_bootstrap_dist <- bootstrap_sampling_distribution(wr_data)
+rb_bootstrap_dist <- bootstrap_sampling_distribution(rb_data)
+
+
+boot_data <- data.frame(
+  CV = c(wr_bootstrap_dist, rb_bootstrap_dist),
+  Position = factor(rep(c("WR", "RB"), each = length(wr_bootstrap_dist)))
+)
+
+ggplot(boot_data, aes(x = CV, fill = Position)) + 
+  geom_density(alpha = 0.5) + 
+  labs(title = "Bootstrapped CV Distribution by Position", 
+       x = "Coefficient of Variation", 
+       y = "Density") +
+  theme_minimal()
+
+
+
+
+
+##Personal 
+#Player Consistency Analysis with Time Series or Distribution                             
+player_consistency <- fantasy_cleaned1 %>%
+  group_by(Player, FantPos) %>%
+  summarise(sd_FantPt = sd(as.numeric(FantPt), na.rm = TRUE)) %>%
+  ungroup()
+
+ggplot(player_consistency, aes(x = sd_FantPt, fill = FantPos)) + 
+  geom_density(alpha = 0.5) + 
+  labs(title = "Distribution of Player Consistency by Position",
+       x = "Standard Deviation of Fantasy Points", 
+       y = "Density") + 
+  theme_minimal() + 
+  scale_fill_brewer(palette = "Set1") 
