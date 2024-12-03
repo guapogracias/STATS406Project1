@@ -1,0 +1,310 @@
+---
+title: "PROJECT 406"
+output: pdf_document
+date: "2024-10-23"
+---
+
+#
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+install.packages('tibble')
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r setup, include=FALSE}
+fantasy_clean <- read.csv('fantasy_cleaned.csv')
+fantasy_cleaned1 <- as_tibble(fantasy_clean, .name_repair = "unique")
+fantasy_cleaned1$PPR <- as.numeric(fantasy_cleaned1$PPR)
+```
+
+```{r}
+df_filtered <- fantasy_cleaned1 %>% filter(G > 7)
+print(df_filtered)
+```
+
+##Based on Notes
+#Calculate year-to-year variance in PPR by position
+```{r}
+df_filtered_grouped <- fantasy_cleaned1 %>%
+  group_by(Player, FantPos, Year) %>%
+  summarise(PPR = sum(PPR, na.rm = TRUE)) %>%
+  ungroup()
+```
+
+
+```{r}
+df_pivot <- tidyr::pivot_wider(df_filtered_grouped, 
+                               names_from = Year, 
+                               values_from = PPR)
+
+variance_by_position <- df_pivot %>%
+  group_by(FantPos) %>%
+  summarise(across(everything(), ~ var(.x, na.rm = TRUE)))
+print(variance_by_position)
+```
+
+#Bootstrap to estimate variance for WRs vs other positions
+```{r}
+bootstrap_variance <- function(data, n_bootstrap = 1000) {
+  variances <- numeric(n_bootstrap)
+  for (i in 1:n_bootstrap) {
+    sample_data <- sample(data, replace = TRUE)
+    variances[i] <- var(sample_data, na.rm = TRUE)
+  }
+  return(variances)
+}
+```
+
+
+```{r}
+wr_data <- df_pivot %>% filter(FantPos == "WR") %>% select(-Player, -FantPos)
+wr_variance <- bootstrap_variance(unlist(wr_data))
+rb_data <- df_pivot %>% filter(FantPos == "RB") %>% select(-Player, -FantPos)
+rb_variance <- bootstrap_variance(unlist(rb_data))
+
+print(mean(wr_variance))
+print(mean(rb_variance))
+```
+
+#Exclude top 24 players and recalculate
+```{r}
+df_mean_ppr <- df_filtered_grouped %>%
+  group_by(Player, FantPos) %>%
+  summarise(mean_PPR = mean(PPR, na.rm = TRUE)) %>%
+  ungroup()
+
+top_24_players <- df_mean_ppr %>%
+  group_by(FantPos) %>%
+  top_n(24, mean_PPR)
+
+df_filtered_excluded <- df_filtered_grouped %>%
+  filter(!(Player %in% top_24_players$Player))
+
+df_pivot_excluded <- tidyr::pivot_wider(df_filtered_excluded, 
+                                        names_from = Year, 
+                                        values_from = PPR)
+
+variance_by_position_excluded <- df_pivot_excluded %>%
+  group_by(FantPos) %>%
+  summarise(across(everything(), ~ var(.x, na.rm = TRUE)))
+
+print(variance_by_position_excluded)
+```
+
+#Coefficient of Variation by Position
+```{r}
+cv_by_position <- fantasy_cleaned1 %>%
+  group_by(FantPos) %>%
+  summarise(mean_FantPt = mean(as.numeric(PPR), na.rm = TRUE),
+            sd_FantPt = sd(as.numeric(PPR), na.rm = TRUE)) %>%
+  mutate(CV = sd_FantPt / mean_FantPt)
+
+print(cv_by_position)
+```
+
+#Monte Carlo Simulation for Draft Strategies
+```{r}
+set.seed(123)  
+
+simulate_draft_strategy <- function(n_sim, positions_order) {
+  results <- numeric(n_sim)
+  
+  for (i in 1:n_sim) {
+    draft <- fantasy_cleaned1 %>%
+      filter(FantPos %in% positions_order) %>%
+      group_by(Player, FantPos) %>%
+      summarise(total_PPR = sum(as.numeric(PPR), na.rm = TRUE)) %>%
+      ungroup() %>%
+      sample_n(length(positions_order)) %>%
+      pull(total_PPR)
+    
+    results[i] <- sum(draft)
+  }
+  
+  return(results)
+}
+
+# Not working
+# wr_rb_strategy <- simulate_draft_strategy(n_sim = 1000, positions_order = c("WR", "RB"))
+# rb_wr_strategy <- simulate_draft_strategy(n_sim = 1000, positions_order = c("RB", "WR"))
+
+# mean(wr_rb_strategy)
+# mean(rb_wr_strategy)
+```
+
+
+#Bootstrapping for Hypothesis Testing on CV
+```{r}
+bootstrap_cv <- function(data, n_bootstrap = 1000) {
+  boot_cvs <- numeric(n_bootstrap)
+  
+  for (i in 1:n_bootstrap) {
+    sample_data <- data %>% sample_frac(replace = TRUE)
+    mean_PPR <- mean(sample_data$PPR, na.rm = TRUE)
+    sd_PPR <- sd(sample_data$PPR, na.rm = TRUE)
+    boot_cvs[i] <- sd_PPR / mean_PPR
+  }
+  
+  return(boot_cvs)
+}
+
+wr_data <- fantasy_cleaned1 %>% filter(FantPos == "WR")
+wr_bootstrap <- bootstrap_cv(wr_data)
+
+rb_data <- fantasy_cleaned1 %>% filter(FantPos == "RB")
+rb_bootstrap <- bootstrap_cv(rb_data)
+
+qb_data <- fantasy_cleaned1 %>% filter(FantPos == "QB")
+rb_bootstrap <- bootstrap_cv(qb_data)
+
+te_data <- fantasy_cleaned1 %>% filter(FantPos == "TE")
+te_bootstrap <- bootstrap_cv(te_data)
+
+t.test(wr_bootstrap, rb_bootstrap)
+```
+
+# Non-parametric Bootstrapping to Estimate Sampling Distributions
+```{r}
+bootstrap_sampling_distribution <- function(data, n_bootstrap = 1000) {
+  boot_samples <- replicate(n_bootstrap, {
+    sample_data <- data %>% sample_frac(replace = TRUE)
+    mean_PPR <- mean(sample_data$PPR, na.rm = TRUE)
+    sd_PPR <- sd(sample_data$PPR, na.rm = TRUE)
+    return(sd_PPR / mean_PPR)
+  })
+  
+  return(boot_samples)
+}
+
+wr_bootstrap_dist <- bootstrap_sampling_distribution(wr_data)
+rb_bootstrap_dist <- bootstrap_sampling_distribution(rb_data)
+qb_bootstrap_dist <- bootstrap_sampling_distribution(qb_data)
+te_bootstrap_dist <- bootstrap_sampling_distribution(te_data)
+
+```
+
+```{r}
+# COLOR CODING
+position_colors <- c("QB" = "red", "RB" = "blue", "WR" = "purple", "TE" = "green")
+```
+
+```{r}
+boot_data <- data.frame(
+  CV = c(qb_bootstrap_dist, rb_bootstrap_dist, wr_bootstrap_dist, te_bootstrap_dist),
+  Position = factor(rep(c("QB", "RB", "WR", "TE"), each = length(wr_bootstrap_dist)))
+)
+
+ggplot(boot_data, aes(x = CV, fill = Position)) + 
+  geom_density(alpha = 0.5) + 
+  labs(title = "Bootstrapped CV Distribution by Position", 
+       x = "Coefficient of Variation", 
+       y = "Density") +
+  xlim(.9, 1.15) + 
+  theme_minimal() + 
+  scale_fill_brewer(palette = "Set1")
+```
+
+##Personnel 
+```{r}
+#Player Consistency Analysis with Time Series or Distribution                             
+player_consistency <- fantasy_cleaned1 %>%
+  filter(G > 8, FantPos != 'FB') %>% 
+  select(Player, FantPos, PPR) %>%
+  drop_na()
+
+
+ggplot(player_consistency, aes(x = PPR, fill = FantPos)) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Distribution of PPR Point Scored by Position",
+       x = "PPR Fantasy Points",
+       y = "Density") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Set1") 
+
+ggplot(player_consistency, aes(x = PPR, fill = FantPos)) + 
+  geom_density(alpha = 0.5) + 
+  labs(title = "Individual Distribution of PPR Points Scored",
+       x = "PPR Fantasy Points", 
+       y = "Density") + 
+  theme_minimal() + 
+  scale_fill_brewer(palette = "Set1") +
+  facet_wrap(~ FantPos, ncol = 2)
+
+```
+
+```{r}
+library(dplyr)
+library(gt)
+
+# Calculate summary statistics for each position
+summary_table <- player_consistency %>%
+  group_by(Pos = FantPos) %>%
+  summarize(
+    Min = min(PPR, na.rm = TRUE),
+    Q1 = quantile(PPR, 0.25, na.rm = TRUE),
+    Median = median(PPR, na.rm = TRUE),
+    Mean = mean(PPR, na.rm = TRUE),
+    Q3 = quantile(PPR, 0.75, na.rm = TRUE),
+    Max = max(PPR, na.rm = TRUE)
+  )
+
+# Display as a styled table with rounded values
+summary_table %>%
+  gt() %>%
+  tab_header(title = "Summary Statistics for PPR by Position") %>%
+  fmt_number(columns = vars(Min, Q1, Median, Mean, Q3, Max), decimals = 2)
+
+
+```
+
+```{r}
+library(dplyr)
+library(knitr)
+
+# Calculate and round summary statistics for each position
+summary_table <- player_consistency %>%
+  group_by(Pos = FantPos) %>%
+  summarize(
+    Min = round(min(PPR, na.rm = TRUE), 2),
+    Q1 = round(quantile(PPR, 0.25, na.rm = TRUE), 2),
+    Median = round(median(PPR, na.rm = TRUE), 2),
+    Mean = round(mean(PPR, na.rm = TRUE), 2),
+    Q3 = round(quantile(PPR, 0.75, na.rm = TRUE), 2),
+    Max = round(max(PPR, na.rm = TRUE), 2)
+  )
+
+# Display as a nicely formatted table
+kable(summary_table, caption = "Summary Statistics for PPR by Position")
+
+```
+
+
+
+```{r}
+player_consistency_top1000 %>%
+  arrange(-PPR)
+```
+
+
+
+```{r}
+player_consistency_top1000 <- player_consistency %>%
+  group_by(FantPos) %>%
+  arrange(desc(PPR)) %>%
+  slice_head(n = 1000) %>%
+  ungroup() 
+
+ggplot(player_consistency_top1000, aes(x = PPR, fill = FantPos)) + 
+  geom_density(alpha = 0.5) + 
+  labs(title = "Distribution of PPR Points Scored by Position",
+       x = "PPR Fantasy Points", 
+       y = "Density") + 
+  theme_minimal() + 
+  scale_fill_brewer(palette = "Set1") 
+```
