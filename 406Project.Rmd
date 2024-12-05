@@ -1,0 +1,444 @@
+---
+title: "PROJECT 406"
+output: pdf_document
+date: "2024-10-23"
+---
+
+#
+
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+#install.packages("tibble")
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r setup, include=FALSE}
+fantasy_clean <- read.csv('fantasy_cleaned.csv')
+fantasy_cleaned1 <- as_tibble(fantasy_clean, .name_repair = "unique")
+fantasy_cleaned1$PPR <- as.numeric(fantasy_cleaned1$PPR)
+```
+
+
+```{r, include=FALSE}
+#install.packages("bayesplot")
+library(ggplot2)
+library(bayesplot)
+theme_set(bayesplot::theme_default())
+
+#install.packages("shinystan")
+library(shinystan)
+
+```
+
+```{r}
+#install.packages("shinystan")
+library(shinystan)
+#launch_shinystan(fit)
+
+```
+
+```{r, include=FALSE}
+#install.packages("rstanarm")
+library(rstanarm)
+library(MASS)
+library(ISLR2)
+```
+
+Now onto the Bayesian Analysis, this will be included in the Analysis section. We start by cleaning the data to only include the variables we need. We are also only looking at 2018-2022 as the training data and testing it vs 2023.
+```{r}
+#selecting the variables we need for training data from 2018-2022
+bay_data_training <- fantasy_cleaned1 %>%
+  select("Player", "FantPos", "Age", "G", "GS", "PPR", "PosRank", "Year") %>%
+  filter(Year >= 2018 & Year < 2023) %>%
+  mutate(PPR = as.numeric(PPR)) %>%
+  mutate(G = as.numeric(G)) %>%
+  mutate(GS = as.numeric(GS)) %>%
+  mutate(Age = as.numeric(Age)) %>%
+  mutate(PosRank = as.numeric(PosRank))
+
+#fixing the names that have added characters
+bay_data_training$Player <- gsub("[*+]", "", bay_data_training$Player)
+
+#selecting the variables we need for testing data 2023
+bay_data_test <- fantasy_cleaned1 %>%
+  select("Player", "FantPos", "Age", "G", "GS", "PPR", "PosRank", "Year") %>%
+  filter(Year == 2023) %>%
+  mutate(PPR = as.numeric(PPR)) %>%
+  mutate(G = as.numeric(G)) %>%
+  mutate(GS = as.numeric(GS)) %>%
+  mutate(Age = as.numeric(Age)) %>%
+  mutate(PosRank = as.numeric(PosRank))
+
+#fixing the names that have added characters
+bay_data_test$Player <- gsub("[*+]", "", bay_data_test$Player)  
+
+```
+
+```{r}
+# finding the players who played 2018-2022 in the training data
+bay_data_training <- bay_data_training %>%
+  group_by(Player) %>%
+  mutate(num = n()) %>%
+  filter(num == 5)
+```
+
+
+Now finding the names of players who have played in 2018-2022 and also 2023
+```{r}
+namestraining <- bay_data_training$Player
+namestest <- bay_data_test$Player
+
+
+common_names <- Reduce(intersect, list(namestraining, namestest))
+
+filtered_train <- bay_data_training[bay_data_training$Player %in% common_names, ]
+filtered_test <- bay_data_test[bay_data_test$Player %in% common_names, ]
+
+# setting NAs to equal 0
+filtered_train[is.na(filtered_train)] <- 0
+filtered_test[is.na(filtered_test)] <- 0
+
+# removing players who have been categorized as different positions between 2018-2023
+
+filtered_train <- filtered_train %>% filter(Player != "Alex Armah")
+filtered_train <- filtered_train %>% filter(Player != "Anthony Firkser")
+filtered_train <- filtered_train %>% filter(Player != "Cordarrelle Patterson")
+filtered_train <- filtered_train %>% filter(Player != "Michael Burton")
+
+filtered_test <- filtered_test %>% filter(Player != "Alex Armah")
+filtered_test <- filtered_test %>% filter(Player != "Anthony Firkser")
+filtered_test <- filtered_test %>% filter(Player != "Cordarrelle Patterson")
+filtered_test <- filtered_test %>% filter(Player != "Michael Burton")
+```
+
+Now splitting the data by position so we can make a model per position
+```{r}
+#QB dataset
+QB_train <- filtered_train %>%
+  select(-num) %>%
+  filter(FantPos == "QB")
+
+QB_test <- filtered_test %>%
+  filter(FantPos == "QB")
+
+#RB dataset
+RB_train <- filtered_train %>%
+  select(-num) %>%
+  filter(FantPos == "RB")
+
+RB_test <- filtered_test %>%
+  filter(FantPos == "RB")
+
+
+#WR dataset
+WR_train <- filtered_train %>%
+  select(-num) %>%
+  filter(FantPos == "WR")
+
+WR_test <- filtered_test %>%
+  filter(FantPos == "WR")
+
+#TE dataset
+TE_train <- filtered_train %>%
+  select(-num) %>%
+  filter(FantPos == "TE")
+
+TE_test <- filtered_test %>%
+  filter(FantPos == "TE")
+
+```
+
+Now making models for each position using Hierarchical Bayesian linear regression models. Models to fit generalized linear mixed-effects models using Stan and stan_glmer and having player be a random effect specifier. 
+```{r}
+# QB model
+QB_model <- stan_glmer(
+  PPR ~ (1 | Player) + Age + G + GS + PosRank,
+  data = QB_train,
+  family = gaussian(link = "identity"),
+  prior = normal(0,10),
+  seed = 123,
+  chains = 4, 
+  iter = 4000,  
+  warmup = 2000
+)
+
+```
+Now testing the QB training against the 2023 test data
+```{r}
+# QB predictions
+prediction_QB <- posterior_predict(QB_model, newdata = QB_test)
+summary(prediction_QB)
+
+# Summarize predictions (PPR mean prediction and credible intervals for PPR)
+QB_test$predicted_points <- apply(prediction_QB, 2, mean)
+QB_test$predicted_points_low <- apply(prediction_QB, 2, quantile, probs = 0.025)
+QB_test$predicted_points_high <- apply(prediction_QB, 2, quantile, probs = 0.975)
+
+# View predictions
+print(QB_test)
+
+```
+
+```{r}
+# QB model using skew normal
+QB_model2 <- brm(
+  PPR ~ (1 | Player) + Age + G + GS + PosRank,
+  data = QB_train,
+  family = skew_normal(),
+  seed = 123,
+  save_pars = save_pars(all = TRUE),
+  chains = 4, 
+  iter = 4000,  
+  warmup = 2000
+)
+
+```
+
+Now testing the QB training against the 2023 test data
+```{r}
+# QB predictions
+prediction_QB2 <- posterior_predict(QB_model2, newdata = QB_test)
+summary(prediction_QB2)
+
+# Summarize predictions (PPR mean prediction and credible intervals for PPR)
+QB_test$predicted_points <- apply(prediction_QB2, 2, mean)
+QB_test$predicted_points_low <- apply(prediction_QB2, 2, quantile, probs = 0.025)
+QB_test$predicted_points_high <- apply(prediction_QB2, 2, quantile, probs = 0.975)
+
+# View predictions
+print(QB_test)
+
+```
+
+```{r}
+# loo to figure out best model
+
+loo10 <- loo(QB_model, cores = 2)
+loo20 <- loo(QB_model2, cores = 2, moment_match = TRUE)
+
+(comp <- loo_compare(loo10, loo20))
+  
+```
+
+```{r}
+# error
+MSE_calc <- function(QB_test) {
+  sum((QB_test$PPR - QB_test$predicted_points)^2) / nrow(QB_test)
+}
+
+MSE_calc(QB_test)
+
+```
+
+```{r}
+# RB model
+RB_model <- stan_glmer(
+  PPR ~ (1 | Player) + Age + G + GS + PosRank,
+  data = RB_train,
+  family = gaussian(link = "identity"),
+  prior = normal(0,10),
+  seed = 123,
+  chains = 4, 
+  iter = 4000,  
+  warmup = 2000
+)
+
+```
+
+Now testing the RB training against the 2023 test data
+```{r}
+# RB predictions
+prediction_RB <- posterior_predict(RB_model, newdata = RB_test)
+summary(prediction_RB)
+
+# Summarize predictions (PPR mean prediction and credible intervals for PPR)
+RB_test$predicted_points <- apply(prediction_RB, 2, mean)
+RB_test$predicted_points_low <- apply(prediction_RB, 2, quantile, probs = 0.025)
+RB_test$predicted_points_high <- apply(prediction_RB, 2, quantile, probs = 0.975)
+
+# View predictions
+print(RB_test)
+
+```
+Downloading new package that has more leway for stan models
+```{r}
+#install.packages("brms")
+library(brms)
+
+```
+
+```{r}
+# RB model using skew normal
+RB_model2 <- brm(
+  PPR ~ (1 | Player) + Age + G + GS + PosRank,
+  data = RB_train,
+  family = skew_normal(),
+  seed = 123,
+  save_pars = save_pars(all = TRUE),
+  chains = 4, 
+  iter = 4000,  
+  warmup = 2000
+)
+
+```
+
+Now testing the RB training with skew normal against the 2023 test data 
+```{r}
+# RB skew normal predictions
+prediction_RB2 <- posterior_predict(RB_model2, newdata = RB_test)
+summary(prediction_RB2)
+
+# Summarize predictions (PPR mean prediction and credible intervals for PPR)
+RB_test$predicted_points <- apply(prediction_RB2, 2, mean)
+RB_test$predicted_points_low <- apply(prediction_RB2, 2, quantile, probs = 0.025)
+RB_test$predicted_points_high <- apply(prediction_RB2, 2, quantile, probs = 0.975)
+
+# View predictions
+print(RB_test)
+
+```
+```{r}
+# loo to figure out best model
+
+loo1 <- loo(RB_model, cores = 2)
+loo2 <- loo(RB_model2, cores = 2, moment_match = TRUE)
+
+(comp <- loo_compare(loo1, loo2))
+  
+```
+```{r}
+# error
+MSE_calc <- function(RB_test) {
+  sum((RB_test$PPR - RB_test$predicted_points)^2) / nrow(RB_test)
+}
+
+MSE_calc(RB_test)
+
+```
+
+```{r}
+# WR model using skew normal
+WR_model <- brm(
+  PPR ~ (1 | Player) + Age + G + GS + PosRank,
+  data = WR_train,
+  family = skew_normal(),
+  seed = 123,
+  save_pars = save_pars(all = TRUE),
+  chains = 4, 
+  iter = 4000,  
+  warmup = 2000
+)
+```
+
+Now testing the WR training with skew normal against the 2023 test data 
+```{r}
+# WR skew normal predictions
+prediction_WR <- posterior_predict(WR_model, newdata = WR_test)
+summary(prediction_WR)
+
+# Summarize predictions (PPR mean prediction and credible intervals for PPR)
+WR_test$predicted_points <- apply(prediction_WR, 2, mean)
+WR_test$predicted_points_low <- apply(prediction_WR, 2, quantile, probs = 0.025)
+WR_test$predicted_points_high <- apply(prediction_WR, 2, quantile, probs = 0.975)
+
+# View predictions
+print(WR_test)
+
+```
+
+```{r}
+# error
+MSE_calc <- function(WR_test) {
+  sum((WR_test$PPR - WR_test$predicted_points)^2) / nrow(WR_test)
+}
+
+MSE_calc(WR_test)
+
+```
+
+
+```{r}
+# TE model using skew normal
+TE_model <- brm(
+  PPR ~ (1 | Player) + Age + G + GS + PosRank,
+  data = TE_train,
+  family = skew_normal(),
+  seed = 123,
+  save_pars = save_pars(all = TRUE),
+  chains = 4, 
+  iter = 4000,  
+  warmup = 2000
+)
+```
+
+Now testing the TE training with skew normal against the 2023 test data 
+```{r}
+# TE skew normal predictions
+prediction_TE <- posterior_predict(TE_model, newdata = TE_test)
+summary(prediction_TE)
+
+# Summarize predictions (PPR mean prediction and credible intervals for PPR)
+TE_test$predicted_points <- apply(prediction_TE, 2, mean)
+TE_test$predicted_points_low <- apply(prediction_TE, 2, quantile, probs = 0.025)
+TE_test$predicted_points_high <- apply(prediction_TE, 2, quantile, probs = 0.975)
+
+# View predictions
+print(TE_test)
+
+```
+
+```{r}
+# error
+MSE_calc <- function(TE_test) {
+  sum((TE_test$PPR - TE_test$predicted_points)^2) / nrow(TE_test)
+}
+
+MSE_calc(TE_test)
+
+```
+
+Now taking samples from each of the posterior predictions for PPR
+```{r}
+# sampling from each of the predicted PPR by position
+n_samp <- 1000
+QB_samp <- sample(QB_test$predicted_points, n_samp, replace = TRUE)
+RB_samp <- sample(RB_test$predicted_points, n_samp, replace = TRUE)
+WR_samp <- sample(WR_test$predicted_points, n_samp, replace = TRUE)
+TE_samp <- sample(TE_test$predicted_points, n_samp, replace = TRUE)
+
+mean(QB_samp > RB_samp)
+mean(QB_samp > WR_samp)
+mean(QB_samp > TE_samp)
+
+mean(RB_samp > QB_samp)
+mean(RB_samp > WR_samp)
+mean(RB_samp > TE_samp)
+
+mean(WR_samp > QB_samp)
+mean(WR_samp > RB_samp)
+mean(WR_samp > TE_samp)
+
+mean(TE_samp > QB_samp)
+mean(TE_samp > RB_samp)
+mean(TE_samp > WR_samp)
+
+mean(QB_samp)
+mean(RB_samp)
+mean(WR_samp)
+mean(TE_samp)
+
+
+```
+
+calculate the percentage of the time the actual PPR is within the predicted points credible interval
+```{r}
+mean(QB_test$PPR > QB_test$predicted_points_low & QB_test$PPR < QB_test$predicted_points_high)
+mean(RB_test$PPR > RB_test$predicted_points_low & RB_test$PPR < RB_test$predicted_points_high)
+mean(WR_test$PPR > WR_test$predicted_points_low & WR_test$PPR < WR_test$predicted_points_high)
+mean(TE_test$PPR > TE_test$predicted_points_low & TE_test$PPR < TE_test$predicted_points_high)
+
+```
