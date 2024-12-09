@@ -41,8 +41,8 @@ print(count_by_position)
 ```
 
 #Monte Carlo
-WR: The p-value is small (<0.05), so the null hypothesis is rejected. The WR data does not fit an exponential distribution well.
-RB: The p-value is small (<0.05), so the null hypothesis is rejected. The RB data does not fit an exponential distribution well.
+WR: The p < 0.05, so we reject null hypothesis. The WR data does not fit an exponential distribution well.
+RB: The p < 0.05, so we reject null hypothesis. The RB data does not fit an exponential distribution well.
 TE: p = 0.065 > 0.05, so we fail to reject the null hypothesis. The TE data appears to fit an exponential distribution reasonably well.
 QB: p = 0.124 > 0.05, so we fail to reject the null hypothesis. The QB data appears to fit a normal distribution reasonably well.
 ```{r}
@@ -159,7 +159,7 @@ bootstrap_cv <- function(data, n_bootstrap = 1000) {
   return(boot_cvs)
 }
 
-# Generate Bootstrap CV for Positions
+# Bootstrap CV by Positions
 wr_data <- df_filtered %>% filter(FantPos == "WR")
 wr_bootstrap <- bootstrap_cv(wr_data)
 
@@ -218,7 +218,7 @@ ggplot(boot_data, aes(x = CV, fill = Position)) +
 ```
 
 #Jackknife - measure the precision of the Bootstrap estimates 
-TE has the most precise bootstrap CV estimates due to its smallest variance, followed by RB, QB, and WR. The higher variance for WR and QB may indicate greater variability in the data for these positions or less predictable patterns in their distributions.
+TE has the most precise bootstrap CV estimates due to its smallest variance, followed by RB, QB, and WR. The higher variance for WR and QB may indicate greater variability in the data for these positions or less predictable patterns in their distributions. However it seems we have produced accurate characterizations. 
 ```{r}
 # 5-Fold Cross-Validation Function for Bootstrap CV Precision
 five_fold_cv_precision <- function(data, group_var, n_bootstrap = 1000, n_folds = 5) {
@@ -289,8 +289,8 @@ ggplot(kfold_data, aes(x = Fold_Estimates, fill = Position)) +
   ) + theme_minimal() + xlim(0.45,1)
 ```
 
-#Other Important Variables 
+#Other Variables to Acknowledge
 ```{r}
-anova1 <- aov(PPR ~ FantPos + Age + Tm, data = fantasy_cleaned1)
+anova1 <- aov(PPR ~ FantPos + Age + Tm + Year, data = df_filtered)
 summary(anova1)
 ```
