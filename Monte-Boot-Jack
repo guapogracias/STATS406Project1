@@ -293,4 +293,182 @@ ggplot(kfold_data, aes(x = Fold_Estimates, fill = Position)) +
 ```{r}
 anova1 <- aov(PPR ~ FantPos + Age + Tm + Year, data = df_filtered)
 summary(anova1)
+
+```
+
+#Simulations
+
+```{r}
+# Simulated Data Generation Function
+generate_synthetic_data <- function(n, fant_pos) {
+  PPR <- case_when(
+    fant_pos == "WR" ~ rexp(n,rate = 0.2),  
+    fant_pos == "RB" ~ rexp(n, rate = 0.2),      
+    fant_pos == "TE" ~ rexp(n, rate = 0.2),                 
+    fant_pos == "QB" ~ rnorm(n, mean = 15, sd = 5),         
+    TRUE ~ rnorm(n, mean = 10, sd = 3)                     
+  )
+  data.frame(FantPos = fant_pos, PPR = PPR)
+}
+
+set.seed(123)
+n <- 1000  
+sim_wr <- generate_synthetic_data(n, "WR")
+sim_rb <- generate_synthetic_data(n, "RB")
+sim_te <- generate_synthetic_data(n, "TE")
+sim_qb <- generate_synthetic_data(n, "QB")
+```
+
+## Bootstrap Simulation
+
+```{r}
+# Bootstrap CV Function for Simulated Data
+bootstrap_cv_simulation <- function(data, n_bootstrap = 1000) {
+  boot_cvs <- numeric(n_bootstrap)
+  
+  for (i in 1:n_bootstrap) {
+    # Sample with replacement
+    sample_data <- data[sample(1:nrow(data), replace = TRUE), ]
+    mean_PPR <- mean(sample_data$PPR, na.rm = TRUE)
+    sd_PPR <- sd(sample_data$PPR, na.rm = TRUE)
+    boot_cvs[i] <- sd_PPR / mean_PPR
+  }
+  
+  return(boot_cvs)
+}
+
+# Run Bootstrap Simulation for Each Simulated Dataset
+wr_bootstrap_sim <- bootstrap_cv_simulation(sim_wr)
+rb_bootstrap_sim <- bootstrap_cv_simulation(sim_rb)
+te_bootstrap_sim <- bootstrap_cv_simulation(sim_te)
+qb_bootstrap_sim <- bootstrap_cv_simulation(sim_qb)
+
+# Combine Bootstrap Results
+sim_boot_data <- data.frame(
+  CV = c(wr_bootstrap_sim, rb_bootstrap_sim, te_bootstrap_sim, qb_bootstrap_sim),
+  Position = factor(rep(c("WR", "RB", "TE", "QB"), 
+                        times = c(length(wr_bootstrap_sim), length(rb_bootstrap_sim), 
+                                  length(te_bootstrap_sim), length(qb_bootstrap_sim))))
+)
+```
+
+```{r}
+# Perform Pairwise T-Test
+pairwise_result_sim <- pairwise.t.test(
+  sim_boot_data$CV,
+  sim_boot_data$Position,
+  p.adjust.method = "bonferroni"
+)
+print(pairwise_result_sim)
+```
+
+```{r}
+# Confidence Interval Calculation Function
+calculate_ci <- function(bootstrap_cvs, conf_level = 0.95) {
+  alpha <- 1 - conf_level
+  ci_lower <- quantile(bootstrap_cvs, probs = alpha / 2, na.rm = TRUE)
+  ci_upper <- quantile(bootstrap_cvs, probs = 1 - alpha / 2, na.rm = TRUE)
+  return(c(Lower = ci_lower, Upper = ci_upper))
+}
+
+# Calculate Confidence Intervals for Simulated Data
+wr_ci_sim <- calculate_ci(wr_bootstrap_sim)
+rb_ci_sim <- calculate_ci(rb_bootstrap_sim)
+te_ci_sim <- calculate_ci(te_bootstrap_sim)
+qb_ci_sim <- calculate_ci(qb_bootstrap_sim)
+
+# Print Results
+cat("Confidence Intervals for Simulated Bootstrap CV:\n")
+cat("WR:", wr_ci_sim, "\n")
+cat("RB:", rb_ci_sim, "\n")
+cat("TE:", te_ci_sim, "\n")
+cat("QB:", qb_ci_sim, "\n")
+
+```
+
+```{r}
+# Visualize Bootstrap CV Distributions
+ggplot(sim_boot_data, aes(x = CV, fill = Position)) + 
+  geom_density(alpha = 0.5) + 
+  labs(title = "Bootstrapped CV Distribution by Position (Simulated Data)", 
+       x = "Coefficient of Variation", 
+       y = "Density") +
+  theme_minimal()
+```
+
+## Jackknife Simulation
+
+```{r}
+# Jackknife CV Function
+jackknife_cv_simulation <- function(data) {
+  n <- nrow(data)
+  jackknife_estimates <- numeric(n)
+  
+  for (i in 1:n) {
+    # Remove the i-th observation
+    jackknife_sample <- data[-i, ]
+    mean_PPR <- mean(jackknife_sample$PPR, na.rm = TRUE)
+    sd_PPR <- sd(jackknife_sample$PPR, na.rm = TRUE)
+    jackknife_estimates[i] <- sd_PPR / mean_PPR
+  }
+  
+  # Calculate jackknife mean and variance
+  jackknife_mean <- mean(jackknife_estimates, na.rm = TRUE)
+  jackknife_variance <- (n - 1) * mean((jackknife_estimates - jackknife_mean)^2, na.rm = TRUE)
+  
+  return(list(estimates = jackknife_estimates, variance = jackknife_variance))
+}
+
+# Apply Jackknife Simulation for Each Simulated Dataset
+wr_jackknife_sim <- jackknife_cv_simulation(sim_wr)
+rb_jackknife_sim <- jackknife_cv_simulation(sim_rb)
+te_jackknife_sim <- jackknife_cv_simulation(sim_te)
+qb_jackknife_sim <- jackknife_cv_simulation(sim_qb)
+```
+
+```{r}
+# Combine Jackknife Results
+jackknife_data <- data.frame(
+  CV = c(wr_jackknife_sim$estimates, rb_jackknife_sim$estimates, 
+         te_jackknife_sim$estimates, qb_jackknife_sim$estimates),
+  Position = factor(rep(c("WR", "RB", "TE", "QB"), 
+                        times = c(length(wr_jackknife_sim$estimates), 
+                                  length(rb_jackknife_sim$estimates), 
+                                  length(te_jackknife_sim$estimates), 
+                                  length(qb_jackknife_sim$estimates))))
+)
+
+# Summary of Jackknife Variance for Each Position
+jackknife_variance_summary <- data.frame(
+  Position = c("WR", "RB", "TE", "QB"),
+  Variance = c(wr_jackknife_sim$variance, 
+               rb_jackknife_sim$variance, 
+               te_jackknife_sim$variance, 
+               qb_jackknife_sim$variance)
+)
+print(jackknife_variance_summary)
+```
+
+```{r}
+# Density Plot of Jackknife CV Estimates
+ggplot(jackknife_data, aes(x = CV, fill = Position)) +
+  geom_density(alpha = 0.5) +
+  labs(
+    title = "Jackknife CV Distribution by Position (Simulated Data)",
+    x = "Coefficient of Variation",
+    y = "Density"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# Bar Chart of Jackknife Variance by Position
+ggplot(jackknife_variance_summary, aes(x = Position, y = Variance, fill = Position)) +
+  geom_bar(stat = "identity", alpha = 0.7) +
+  labs(
+    title = "Jackknife Variance by Position (Simulated Data)",
+    x = "Position",
+    y = "Variance"
+  ) +
+  theme_minimal()
 ```
