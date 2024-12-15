@@ -5,6 +5,10 @@ library(reshape2)
 library(ggplot2)
 library(MASS)
 library(dplyr)
+library(knitr)
+install.packages("gt")
+library(gt)
+install.packages("rlang")
 
 set.seed(123)
 
@@ -16,6 +20,7 @@ df_filtered <- fantasy_cleaned1
 df_filtered$G <- as.integer(fantasy_cleaned1$G)
 df_filtered <- df_filtered %>% filter(G > 7, FantPos != "FB") 
 df_filtered <- df_filtered %>% rename_with(~ make.names(., unique = TRUE))
+print(head(df_filtered))
 ```
 
 # Density Plot
@@ -38,6 +43,10 @@ count_by_position <- df_filtered %>%
   summarise(Count = n())
 
 print(count_by_position)
+kable(count_by_position, caption = "Number of Players by Position")
+count_by_position %>%
+  gt() %>%
+  tab_header(title = "Number of Players by Position")
 ```
 
 #Monte Carlo
@@ -101,7 +110,6 @@ cv_results <- monte_carlo_cv(
   qb_params = qb_fit$estimate
 )
 
-# Visual Results
 cv_data <- data.frame(
   CV = c(cv_results$WR, cv_results$RB, cv_results$TE, cv_results$QB),
   Position = rep(c("WR", "RB", "TE", "QB"), each = n_sim)
@@ -120,31 +128,6 @@ ggplot(cv_data, aes(x = CV, fill = Position)) +
 #Bootstrap - Stratified by position 
 We can see that there is no similarity between positions and their respective CV values compared to one another. We used bootstrap as it is not as dependent on variability as Monte Carlo. 
 ```{r}
-# Stratified Permutation Test Function
-stratified_permutation_test <- function(data, group_var, value_var, n_permutations = 1000) {
-  # Compute observed differences in CV means across groups
-  observed_diff <- tapply(data[[value_var]], data[[group_var]], mean, na.rm = TRUE) %>% diff()
-  
-  perm_diffs <- numeric(n_permutations)
-  
-  for (i in 1:n_permutations) {
-    # Shuffle values within each group (stratified shuffling)
-    permuted_data <- data %>%
-      group_by_at(group_var) %>%
-      mutate(!!value_var := sample(!!sym(value_var))) %>%
-      ungroup()
-    
-    # Compute permuted differences in means
-    permuted_diff <- tapply(permuted_data[[value_var]], permuted_data[[group_var]], mean, na.rm = TRUE) %>% diff()
-    perm_diffs[i] <- permuted_diff
-  }
-  
-  # Calculate p-value as the proportion of permuted differences more extreme than observed
-  p_value <- mean(abs(perm_diffs) >= abs(observed_diff))
-  
-  return(list(observed_diff = observed_diff, p_value = p_value))
-}
-
 # Bootstrap CV Function
 bootstrap_cv <- function(data, n_bootstrap = 1000) {
   boot_cvs <- numeric(n_bootstrap)
@@ -201,14 +184,13 @@ rb_ci <- calculate_ci(rb_bootstrap)
 te_ci <- calculate_ci(te_bootstrap)
 qb_ci <- calculate_ci(qb_bootstrap)
 
-# Print Results
+# Results
 cat("Confidence Intervals for Bootstrap CV:\n")
 cat("WR:", wr_ci, "\n")
 cat("RB:", rb_ci, "\n")
 cat("TE:", te_ci, "\n")
 cat("QB:", qb_ci, "\n")
 
-# Visualize Bootstrap CV Distributions
 ggplot(boot_data, aes(x = CV, fill = Position)) + 
   geom_density(alpha = 0.5) + 
   labs(title = "Bootstrapped CV Distribution by Position", 
@@ -217,42 +199,34 @@ ggplot(boot_data, aes(x = CV, fill = Position)) +
   theme_minimal()
 ```
 
+
+
 #Jackknife - measure the precision of the Bootstrap estimates 
-TE has the most precise bootstrap CV estimates due to its smallest variance, followed by RB, QB, and WR. The higher variance for WR and QB may indicate greater variability in the data for these positions or less predictable patterns in their distributions. However it seems we have produced accurate characterizations. 
 ```{r}
-# 5-Fold Cross-Validation Function for Bootstrap CV Precision
 five_fold_cv_precision <- function(data, group_var, n_bootstrap = 1000, n_folds = 5) {
-  # Split the data by position (group_var)
   grouped_data <- split(data, data[[group_var]])
   
   results <- list()
-  
-  # Iterate over each group (position)
+
   for (group in names(grouped_data)) {
     group_data <- grouped_data[[group]]
     n <- nrow(group_data)
     
-    # Create fold indices
     fold_indices <- sample(rep(1:n_folds, length.out = n))
     fold_estimates <- numeric(n_folds)
     
-    # Perform 5-fold cross-validation
     for (fold in 1:n_folds) {
-      # Split into train and test sets
       train_data <- group_data[fold_indices != fold, ]
       
-      # Compute Bootstrap CV for the Train Set
       bootstrap_cvs <- numeric(n_bootstrap)
       for (j in 1:n_bootstrap) {
         sample_data <- sample(train_data$PPR, replace = TRUE)  # Bootstrap sampling
         bootstrap_cvs[j] <- sd(sample_data, na.rm = TRUE) / mean(sample_data, na.rm = TRUE)  # Compute CV
       }
       
-      # Calculate the mean CV for this fold
       fold_estimates[fold] <- mean(bootstrap_cvs, na.rm = TRUE)
     }
     
-    # Calculate the variance of the fold estimates (Precision of Bootstrap CV)
     cross_validation_variance <- var(fold_estimates, na.rm = TRUE)
     
     results[[group]] <- list(
@@ -264,7 +238,7 @@ five_fold_cv_precision <- function(data, group_var, n_bootstrap = 1000, n_folds 
   return(results)
 }
 
-# Apply 5-Fold CV Precision Function
+# Apply 5-Fold 
 kfold_results <- five_fold_cv_precision(df_filtered, group_var = "FantPos", n_bootstrap = 1000, n_folds = 5)
 
 for (position in names(kfold_results)) {
@@ -272,7 +246,6 @@ for (position in names(kfold_results)) {
   cat("5-Fold Variance of Bootstrap CV:", kfold_results[[position]]$cross_validation_variance, "\n\n")
 }
 
-#Combine Results for Visualization
 kfold_data <- do.call(rbind, lapply(names(kfold_results), function(pos) {
   data.frame(
     Position = pos,
@@ -280,20 +253,21 @@ kfold_data <- do.call(rbind, lapply(names(kfold_results), function(pos) {
   )
 }))
 
-ggplot(kfold_data, aes(x = Fold_Estimates, fill = Position)) +
-  geom_density(alpha = 0.5) +
-  labs(
-    title = "5-Fold CV Precision of Bootstrap CV by Position",
-    x = "Bootstrap CV Estimate",
-    y = "Density"
-  ) + theme_minimal() + xlim(0.45,1)
+kfold_table %>%
+  gt() %>%
+  tab_header(
+    title = "5-Fold Variance of Bootstrap CV by Position"
+  ) %>%
+  cols_label(
+    Position = "Position",
+    CrossValidationVariance = "5-Fold Variance"
+  )
 ```
 
 #Other Variables to Acknowledge
 ```{r}
 anova1 <- aov(PPR ~ FantPos + Age + Tm + Year, data = df_filtered)
 summary(anova1)
-
 ```
 
 #Simulations
